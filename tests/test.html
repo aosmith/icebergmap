@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Iceberg Map — Tests</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a0f;
+            color: #e0e0e0;
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            padding: 2rem;
+            font-size: 14px;
+        }
+        h1 { color: #4ea8de; margin-bottom: 1rem; }
+        #test-output {
+            white-space: pre;
+            line-height: 1.6;
+        }
+        .test-suite { color: #4ea8de; font-weight: bold; }
+        .test-pass { color: #34d399; }
+        .test-fail { color: #f87171; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Iceberg Map Test Suite</h1>
+    <div id="test-output"></div>
+
+    <script type="module">
+        import { runCidrTests } from './cidr.test.js';
+        import { runDbTests } from './db.test.js';
+        import { runNetworkTests } from './network.test.js';
+        import { summary } from './runner.js';
+
+        // Sync tests first
+        runCidrTests();
+
+        // Then async tests
+        await runDbTests();
+        await runNetworkTests();
+
+        const result = summary();
+        document.title = result.failed > 0
+            ? `FAIL (${result.failed}) — Iceberg Map Tests`
+            : `PASS (${result.passed}) — Iceberg Map Tests`;
+    </script>
+</body>
+</html>
