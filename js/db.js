@@ -177,6 +177,90 @@ export async function purgeOldSightings(days) {
     });
 }
 
+export async function getAllSightingIds() {
+    const database = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = database.transaction('sightings', 'readonly');
+        const store = tx.objectStore('sightings');
+        const request = store.getAllKeys();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = (e) => reject(e.target.error);
+    });
+}
+
+export async function getSightingsById(ids) {
+    const database = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = database.transaction('sightings', 'readonly');
+        const store = tx.objectStore('sightings');
+        const results = [];
+        let pending = ids.length;
+
+        if (pending === 0) { resolve([]); return; }
+
+        for (const id of ids) {
+            const request = store.get(id);
+            request.onsuccess = () => {
+                if (request.result) results.push(request.result);
+                if (--pending === 0) resolve(results);
+            };
+            request.onerror = () => {
+                if (--pending === 0) resolve(results);
+            };
+        }
+    });
+}
+
+export async function estimatePhotoStorage() {
+    const database = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = database.transaction('sightings', 'readonly');
+        const store = tx.objectStore('sightings');
+        const request = store.getAll();
+
+        request.onsuccess = () => {
+            let totalBytes = 0;
+            for (const s of request.result) {
+                if (s.photos) {
+                    for (const p of s.photos) {
+                        totalBytes += (p.length - p.indexOf(',') - 1) * 0.75;
+                    }
+                }
+            }
+            resolve(totalBytes);
+        };
+        request.onerror = (e) => reject(e.target.error);
+    });
+}
+
+export async function evictOldestPhotos(targetBytes) {
+    const database = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = database.transaction('sightings', 'readwrite');
+        const store = tx.objectStore('sightings');
+        const request = store.index('received_at').openCursor();
+        let freed = 0;
+
+        request.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor && freed < targetBytes) {
+                const s = cursor.value;
+                if (s.photos && s.photos.length > 0) {
+                    for (const p of s.photos) {
+                        freed += (p.length - p.indexOf(',') - 1) * 0.75;
+                    }
+                    s.photos = null;
+                    cursor.update(s);
+                }
+                cursor.continue();
+            }
+        };
+
+        tx.oncomplete = () => resolve(freed);
+        tx.onerror = (e) => reject(e.target.error);
+    });
+}
+
 export async function clearAllData() {
     const database = await openDB();
     return new Promise((resolve, reject) => {
