@@ -1,7 +1,7 @@
 // P2P networking via Trystero (BitTorrent DHT matchmaking + WebRTC)
 // All messages are anonymous — no peer IDs, no identity, just sighting data
 
-import { joinRoom } from 'https://esm.run/trystero/torrent';
+import { joinRoom, getRelaySockets } from 'https://esm.run/trystero/torrent';
 import { saveSighting, sightingExists, saveConfirmation, getAllSightingIds, getSightingsById, estimatePhotoStorage, evictOldestPhotos, getAllConfirmationIds, getConfirmationsById } from './db.js';
 import { checkFederalIP, extractIPsFromCandidate } from './cidr.js';
 import { reencodePhoto } from './media.js';
@@ -15,6 +15,16 @@ const TRACKER_URLS = [
     'wss://tracker.btorrent.xyz',
     'wss://tracker.files.fm:7073/announce',
 ];
+
+const RTC_CONFIG = {
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun.cloudflare.com:3478' },
+        { urls: 'stun:stun.services.mozilla.com:3478' },
+    ]
+};
 
 // Sync limits
 const MAX_SYNC_SIGHTINGS = 200;
@@ -115,11 +125,28 @@ export function initNetwork({ onSighting, onPeerCount }) {
     }
 
     try {
-        room = joinRoom({ appId: APP_ID, trackerUrls: TRACKER_URLS }, ROOM_NAME);
+        room = joinRoom(
+            { appId: APP_ID, relayUrls: TRACKER_URLS, rtcConfig: RTC_CONFIG },
+            ROOM_NAME,
+            (err) => netLog('block', `Join error: ${err}`)
+        );
     } catch (err) {
         netLog('block', `Failed to join room: ${err.message}`);
         return;
     }
+
+    // Check relay/tracker connection status after a few seconds
+    setTimeout(() => {
+        try {
+            const sockets = getRelaySockets();
+            for (const [url, ws] of Object.entries(sockets)) {
+                const state = ws.readyState === 1 ? 'connected' : ws.readyState === 0 ? 'connecting' : 'failed';
+                netLog(state === 'connected' ? 'info' : 'block', `Tracker ${url}: ${state}`);
+            }
+        } catch (e) {
+            netLog('block', `Could not read relay sockets: ${e.message}`);
+        }
+    }, 5000);
 
     // Warn if no peers found after 15 seconds
     setTimeout(() => {
