@@ -261,6 +261,53 @@ export async function evictOldestPhotos(targetBytes) {
     });
 }
 
+export async function getAllConfirmationIds() {
+    const database = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = database.transaction('confirmations', 'readonly');
+        const store = tx.objectStore('confirmations');
+        const request = store.getAllKeys();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = (e) => reject(e.target.error);
+    });
+}
+
+export async function getConfirmationsById(ids) {
+    const database = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = database.transaction('confirmations', 'readonly');
+        const store = tx.objectStore('confirmations');
+        const results = [];
+        let pending = ids.length;
+        if (pending === 0) { resolve([]); return; }
+        for (const id of ids) {
+            const request = store.get(id);
+            request.onsuccess = () => {
+                if (request.result) results.push(request.result);
+                if (--pending === 0) resolve(results);
+            };
+            request.onerror = () => {
+                if (--pending === 0) resolve(results);
+            };
+        }
+    });
+}
+
+export async function getLocalVote(sightingId) {
+    const database = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = database.transaction('confirmations', 'readonly');
+        const store = tx.objectStore('confirmations');
+        const index = store.index('sighting_id');
+        const request = index.getAll(sightingId);
+        request.onsuccess = () => {
+            const local = request.result.find(c => c.id.startsWith('local_'));
+            resolve(local ? local.confirmed : null);
+        };
+        request.onerror = (e) => reject(e.target.error);
+    });
+}
+
 export async function clearAllData() {
     const database = await openDB();
     return new Promise((resolve, reject) => {

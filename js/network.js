@@ -2,7 +2,7 @@
 // All messages are anonymous — no peer IDs, no identity, just sighting data
 
 import { joinRoom } from 'https://esm.run/trystero/torrent';
-import { saveSighting, sightingExists, saveConfirmation, getAllSightingIds, getSightingsById, estimatePhotoStorage, evictOldestPhotos } from './db.js';
+import { saveSighting, sightingExists, saveConfirmation, getAllSightingIds, getSightingsById, estimatePhotoStorage, evictOldestPhotos, getAllConfirmationIds, getConfirmationsById } from './db.js';
 import { checkFederalIP, extractIPsFromCandidate } from './cidr.js';
 import { reencodePhoto } from './media.js';
 
@@ -18,6 +18,8 @@ const MAX_SIGHTING_TEXT_BYTES = 8 * 1024;
 const PHOTO_BACKOFF_BASE_MS = 2000;
 const PHOTO_BACKOFF_MAX_MS = 60000;
 const MAX_PHOTO_STORAGE_BYTES = 50 * 1024 * 1024;
+const MAX_SYNC_CONFIRMATIONS = 500;
+const MAX_SYNC_CONF_IDS = 5000;
 const SYNC_COOLDOWN_MS = 60000;
 
 let room = null;
@@ -25,10 +27,17 @@ let sendSighting = null;
 let sendConfirmation = null;
 let sendSyncIds = null;
 let sendSyncData = null;
+let sendSyncConfIds = null;
+let sendSyncConfData = null;
 let peerCount = 0;
 let blockedCount = 0;
 let onPeerCountChange = null;
 let onSightingReceived = null;
+let networkStartTime = null;
+let sightingsReceived = 0;
+let sightingsSent = 0;
+let syncCompletedCount = 0;
+let consoleCallback = null;
 
 // Track seen message IDs to prevent infinite re-broadcast
 const seenMessages = new Set();
@@ -36,6 +45,11 @@ const MAX_SEEN = 5000;
 
 // Per-peer sync state
 const peerSyncState = new Map();
+
+function netLog(tag, msg) {
+    console.log(`[P2P] [${tag}] ${msg}`);
+    if (consoleCallback) consoleCallback(tag, msg);
+}
 
 function addSeen(id) {
     seenMessages.add(id);
@@ -91,11 +105,15 @@ export function initNetwork({ onSighting, onPeerCount }) {
     // Sync actions
     const [_sendSyncIds, getSyncIds] = room.makeAction('sync-ids');
     const [_sendSyncData, getSyncData] = room.makeAction('sync-data');
+    const [_sendSyncConfIds, getSyncConfIds] = room.makeAction('sync-conf-ids');
+    const [_sendSyncConfData, getSyncConfData] = room.makeAction('sync-conf-data');
 
     sendSighting = _sendSighting;
     sendConfirmation = _sendConfirmation;
     sendSyncIds = _sendSyncIds;
     sendSyncData = _sendSyncData;
+    sendSyncConfIds = _sendSyncConfIds;
+    sendSyncConfData = _sendSyncConfData;
 
     // --- Live broadcast handlers ---
 
@@ -110,6 +128,8 @@ export function initNetwork({ onSighting, onPeerCount }) {
             }
             data.received_at = new Date().toISOString();
             await saveSighting(data);
+            sightingsReceived++;
+            netLog('recv', `Sighting "${data.title || data.id}" (${data.report_type}) from peer`);
             if (onSightingReceived) onSightingReceived(data);
         }
     });
@@ -126,6 +146,7 @@ export function initNetwork({ onSighting, onPeerCount }) {
             created_at: new Date().toISOString()
         });
 
+        netLog('recv', `Confirmation for ${data.sighting_id} (${data.confirmed ? 'confirm' : 'dispute'})`);
         if (onSightingReceived) onSightingReceived(null);
     });
 
@@ -150,6 +171,8 @@ export function initNetwork({ onSighting, onPeerCount }) {
         peerSyncState.get(peerId).lastSyncSent = Date.now();
 
         // Send missing sightings with photo backoff
+        syncCompletedCount++;
+        netLog('sync', `Sending ${theyNeed.length} missing sightings to peer`);
         sendMissingSightings(theyNeed, peerId);
     });
 
@@ -170,6 +193,7 @@ export function initNetwork({ onSighting, onPeerCount }) {
 
             // If photos arriving faster than expected backoff, strip them
             if (state.lastPhotoReceived && elapsed < (state.photoBackoff || 0) * 0.5) {
+                netLog('block', `Stripped photos from peer (rate limit exceeded)`);
                 data.photos = null;
             } else {
                 data.photos = await cleanPhotos(data.photos);
@@ -196,8 +220,48 @@ export function initNetwork({ onSighting, onPeerCount }) {
         if (!exists) {
             data.received_at = new Date().toISOString();
             await saveSighting(data);
+            netLog('sync', `Synced sighting "${data.title || data.id}" (${data.report_type})${data.photos ? ` +${data.photos.length} photo(s)` : ''}`);
             if (onSightingReceived) onSightingReceived(data);
         }
+    });
+
+    // --- Confirmation sync handlers ---
+
+    getSyncConfIds(async (theirIds, peerId) => {
+        if (!Array.isArray(theirIds)) return;
+
+        const state = peerSyncState.get(peerId);
+        if (state && state.lastConfSyncSent && Date.now() - state.lastConfSyncSent < SYNC_COOLDOWN_MS) return;
+
+        const ourIds = await getAllConfirmationIds();
+        const theirIdSet = new Set(theirIds.slice(0, MAX_SYNC_CONF_IDS));
+        const theyNeed = ourIds.filter(id => !theirIdSet.has(id)).slice(0, MAX_SYNC_CONFIRMATIONS);
+
+        if (theyNeed.length === 0) return;
+
+        if (!peerSyncState.has(peerId)) peerSyncState.set(peerId, {});
+        peerSyncState.get(peerId).lastConfSyncSent = Date.now();
+
+        const confirmations = await getConfirmationsById(theyNeed);
+        netLog('sync', `Sending ${confirmations.length} missing confirmations to peer`);
+        for (const c of confirmations) {
+            sendSyncConfData(c, peerId);
+        }
+    });
+
+    getSyncConfData(async (data, peerId) => {
+        if (!data || !data.id || !data.sighting_id || typeof data.confirmed !== 'boolean') return;
+        if (seenMessages.has(data.id)) return;
+        addSeen(data.id);
+
+        await saveConfirmation({
+            id: data.id,
+            sighting_id: data.sighting_id,
+            confirmed: data.confirmed,
+            created_at: data.created_at || new Date().toISOString()
+        });
+
+        if (onSightingReceived) onSightingReceived(null);
     });
 
     // --- Peer lifecycle ---
@@ -205,21 +269,25 @@ export function initNetwork({ onSighting, onPeerCount }) {
     room.onPeerJoin(async (peerId) => {
         peerCount++;
         if (onPeerCountChange) onPeerCountChange(peerCount);
-        console.log(`[P2P] Peer joined (${peerCount} total)`);
+        netLog('peer', `Peer joined (${peerCount} total)`);
 
-        // Initiate sync: send our sighting IDs
+        // Initiate sync: send our sighting IDs and confirmation IDs
         const ids = await getAllSightingIds();
         sendSyncIds(ids.slice(0, MAX_SYNC_IDS), peerId);
+
+        const confIds = await getAllConfirmationIds();
+        sendSyncConfIds(confIds.slice(0, MAX_SYNC_CONF_IDS), peerId);
     });
 
     room.onPeerLeave((peerId) => {
         peerCount = Math.max(0, peerCount - 1);
         peerSyncState.delete(peerId);
         if (onPeerCountChange) onPeerCountChange(peerCount);
-        console.log(`[P2P] Peer left (${peerCount} total)`);
+        netLog('peer', `Peer left (${peerCount} total)`);
     });
 
-    console.log('[P2P] Network initialized — joining BitTorrent DHT swarm');
+    networkStartTime = Date.now();
+    netLog('info', 'Network initialized — joining BitTorrent DHT swarm');
 }
 
 /**
@@ -263,7 +331,8 @@ export function publishSighting(sighting) {
     setTimeout(() => {
         if (sendSighting && peerCount > 0) {
             sendSighting(sighting);
-            console.log(`[P2P] Broadcast sighting after ${Math.round(delay / 1000)}s delay`);
+            sightingsSent++;
+            netLog('send', `Broadcast sighting after ${Math.round(delay / 1000)}s delay`);
         }
     }, delay);
 }
@@ -296,6 +365,32 @@ export function getPeerCount() {
 
 export function getBlockedCount() {
     return blockedCount;
+}
+
+export function getNetworkStats() {
+    const uptimeMs = networkStartTime ? Date.now() - networkStartTime : 0;
+    const uptimeMins = Math.floor(uptimeMs / 60000);
+    const uptimeHours = Math.floor(uptimeMins / 60);
+    let uptime;
+    if (uptimeHours > 0) uptime = `${uptimeHours}h ${uptimeMins % 60}m`;
+    else if (uptimeMins > 0) uptime = `${uptimeMins}m`;
+    else uptime = `${Math.floor(uptimeMs / 1000)}s`;
+
+    return {
+        peers: peerCount,
+        blocked: blockedCount,
+        sightingsReceived,
+        sightingsSent,
+        syncsCompleted: syncCompletedCount,
+        seenMessages: seenMessages.size,
+        uptime,
+        protocol: 'BitTorrent DHT + WebRTC',
+        room: ROOM_NAME,
+    };
+}
+
+export function onConsoleLog(callback) {
+    consoleCallback = callback;
 }
 
 export function shutdown() {

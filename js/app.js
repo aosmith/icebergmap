@@ -1,8 +1,8 @@
 // Iceberg Map — Anonymous P2P ICE Sighting Reports
 // No accounts. No servers. No tracking.
 
-import { openDB, saveSighting, getSightings, getSightingCount, getConfirmationCounts, saveConfirmation, purgeOldSightings, clearAllData } from './db.js';
-import { initNetwork, publishSighting, publishConfirmation, getPeerCount, getBlockedCount } from './network.js';
+import { openDB, saveSighting, getSightings, getSightingCount, getConfirmationCounts, saveConfirmation, purgeOldSightings, clearAllData, getLocalVote } from './db.js';
+import { initNetwork, publishSighting, publishConfirmation, getPeerCount, getBlockedCount, getNetworkStats, onConsoleLog } from './network.js';
 import { initMap, updateMapSightings, invalidateMap } from './map.js';
 import { stripMetadata } from './media.js';
 
@@ -25,6 +25,8 @@ const TYPE_LABELS = {
 let currentView = 'feed';
 let mapInitialized = false;
 let strippedPhotos = []; // accumulated stripped photos for current report
+let networkModalInterval = null;
+let consoleEnabled = false;
 
 async function init() {
     await openDB();
@@ -34,6 +36,7 @@ async function init() {
     setupReportForm();
     setupSettings();
     setupFilters();
+    setupNetworkModal();
 
     // Initialize P2P network
     initNetwork({
@@ -195,7 +198,8 @@ async function refreshFeed() {
     const cards = [];
     for (const s of sightings) {
         const counts = await getConfirmationCounts(s.id);
-        cards.push(renderSightingCard(s, counts));
+        const localVote = await getLocalVote(s.id);
+        cards.push(renderSightingCard(s, counts, localVote));
     }
     list.innerHTML = cards.join('');
 
@@ -208,14 +212,25 @@ async function refreshFeed() {
     });
 }
 
-function renderSightingCard(s, counts) {
+function getTrustClass(counts) {
+    const { confirms, disputes } = counts;
+    if (confirms >= 3 && confirms > disputes * 2) return 'trust-verified';
+    if (disputes >= 3 && disputes > confirms * 2) return 'trust-disputed';
+    return '';
+}
+
+function renderSightingCard(s, counts, localVote) {
     const time = formatRelativeTime(s.sighted_at || s.created_at);
     const location = s.location_name || (s.state ? s.state : '');
     const title = s.title || s.description.substring(0, 60);
     const hasPhotos = s.photos && s.photos.length > 0;
+    const trustClass = getTrustClass(counts);
+    const hasVoted = localVote !== null;
+    const confirmBtnClass = hasVoted ? (localVote === true ? 'voted voted-yes' : 'voted') : '';
+    const disputeBtnClass = hasVoted ? (localVote === false ? 'voted voted-no' : 'voted') : '';
 
     return `
-        <div class="sighting-card" data-id="${s.id}">
+        <div class="sighting-card ${trustClass}" data-id="${s.id}">
             <div class="sighting-card-header">
                 <span class="type-badge ${s.report_type}">${TYPE_LABELS[s.report_type] || s.report_type}</span>
                 <span class="sighting-location">${escapeHtml(location)}</span>
@@ -230,11 +245,11 @@ function renderSightingCard(s, counts) {
                 ${s.state ? `<span>${s.state}</span>` : ''}
             </div>
             <div class="sighting-actions">
-                <button class="btn-confirm" data-id="${s.id}">
-                    Confirm <span class="confirm-count">(${counts.confirms})</span>
+                <button class="btn-confirm ${confirmBtnClass}" data-id="${s.id}" ${hasVoted ? 'disabled' : ''}>
+                    ${localVote === true ? 'Confirmed' : 'Confirm'} <span class="confirm-count">(${counts.confirms})</span>
                 </button>
-                <button class="btn-dispute" data-id="${s.id}">
-                    Dispute <span class="dispute-count">(${counts.disputes})</span>
+                <button class="btn-dispute ${disputeBtnClass}" data-id="${s.id}" ${hasVoted ? 'disabled' : ''}>
+                    ${localVote === false ? 'Disputed' : 'Dispute'} <span class="dispute-count">(${counts.disputes})</span>
                 </button>
             </div>
         </div>
@@ -242,6 +257,12 @@ function renderSightingCard(s, counts) {
 }
 
 async function handleConfirmation(sightingId, confirmed) {
+    const existingVote = await getLocalVote(sightingId);
+    if (existingVote !== null) {
+        showToast('You already voted on this sighting', 'error');
+        return;
+    }
+
     const confId = `local_${sightingId}_${Date.now()}`;
     await saveConfirmation({
         id: confId,
@@ -374,6 +395,96 @@ async function refreshSettings() {
 function updatePeerCount(count) {
     document.getElementById('peer-count').textContent = `${count} peer${count !== 1 ? 's' : ''}`;
     document.getElementById('settings-peer-count').textContent = count;
+}
+
+// --- Network Info Modal ---
+
+function setupNetworkModal() {
+    const modal = document.getElementById('network-modal');
+    const closeBtn = document.getElementById('network-modal-close');
+
+    document.getElementById('peer-count').addEventListener('click', () => openNetworkModal());
+    closeBtn.addEventListener('click', () => closeNetworkModal());
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeNetworkModal();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !modal.hidden) closeNetworkModal();
+    });
+
+    // Console mode
+    document.getElementById('btn-console-mode').addEventListener('click', () => {
+        toggleConsole();
+        closeNetworkModal();
+    });
+    document.getElementById('console-close').addEventListener('click', () => toggleConsole());
+}
+
+function openNetworkModal() {
+    const modal = document.getElementById('network-modal');
+    modal.hidden = false;
+    refreshNetworkStats();
+    // Refresh stats every 2 seconds while modal is open
+    networkModalInterval = setInterval(refreshNetworkStats, 2000);
+}
+
+function closeNetworkModal() {
+    document.getElementById('network-modal').hidden = true;
+    if (networkModalInterval) {
+        clearInterval(networkModalInterval);
+        networkModalInterval = null;
+    }
+}
+
+function refreshNetworkStats() {
+    const stats = getNetworkStats();
+    document.getElementById('stat-status').textContent = stats.peers > 0 ? 'Connected' : 'Searching for peers...';
+    document.getElementById('stat-status').style.color = stats.peers > 0 ? 'var(--success)' : 'var(--warning)';
+    document.getElementById('stat-peers').textContent = stats.peers;
+    document.getElementById('stat-uptime').textContent = stats.uptime;
+    document.getElementById('stat-protocol').textContent = stats.protocol;
+    document.getElementById('stat-received').textContent = stats.sightingsReceived;
+    document.getElementById('stat-sent').textContent = stats.sightingsSent;
+    document.getElementById('stat-syncs').textContent = stats.syncsCompleted;
+    document.getElementById('stat-seen').textContent = stats.seenMessages;
+    document.getElementById('stat-blocked').textContent = stats.blocked;
+}
+
+// --- Console Mode ---
+
+function toggleConsole() {
+    const overlay = document.getElementById('console-overlay');
+    consoleEnabled = !consoleEnabled;
+    overlay.hidden = !consoleEnabled;
+
+    const btn = document.getElementById('btn-console-mode');
+    if (consoleEnabled) {
+        btn.textContent = 'Disable Console Mode';
+        onConsoleLog((tag, msg) => appendConsoleLine(tag, msg));
+        appendConsoleLine('info', 'Console mode enabled');
+    } else {
+        btn.textContent = 'Enable Console Mode';
+        onConsoleLog(null);
+    }
+}
+
+function appendConsoleLine(tag, msg) {
+    const output = document.getElementById('console-output');
+    if (!output) return;
+
+    const line = document.createElement('div');
+    line.className = 'log-line';
+
+    const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    line.innerHTML = `<span class="log-time">${time}</span> <span class="log-tag ${escapeHtml(tag)}">[${escapeHtml(tag.toUpperCase())}]</span> ${escapeHtml(msg)}`;
+
+    output.appendChild(line);
+    output.scrollTop = output.scrollHeight;
+
+    // Cap at 500 lines
+    while (output.children.length > 500) {
+        output.removeChild(output.firstChild);
+    }
 }
 
 async function refreshCurrentView() {

@@ -97,12 +97,64 @@
 
         <!-- Footer -->
         <footer id="app-footer">
-            This is a community project. We need help ❤️
-            <a href="https://github.com/aosmith/icebergmap" target="_blank" rel="noopener">Contribute on GitHub</a>.
+            This is a community project. We need help.
+            <a href="https://github.com/aosmith/icebergmap" target="_blank" rel="noopener">Contribute on GitHub</a>. <span class="footer-heart">❤️</span>
         </footer>
 
         <!-- Floating Report Button -->
         <button id="btn-report" class="fab" title="Report a sighting">+ Report</button>
+
+        <!-- Network Info Modal -->
+        <div id="network-modal" class="modal-overlay" hidden>
+            <div class="modal modal-compact">
+                <div class="modal-header">
+                    <h2>Network Status</h2>
+                    <button id="network-modal-close" class="modal-close">&times;</button>
+                </div>
+                <div class="network-stats">
+                    <div class="stat-row">
+                        <span class="stat-label">Status</span>
+                        <span id="stat-status" class="stat-value">Connecting...</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Connected Peers</span>
+                        <span id="stat-peers" class="stat-value">0</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Uptime</span>
+                        <span id="stat-uptime" class="stat-value">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Protocol</span>
+                        <span id="stat-protocol" class="stat-value">-</span>
+                    </div>
+                    <div class="stat-divider"></div>
+                    <div class="stat-row">
+                        <span class="stat-label">Sightings Received</span>
+                        <span id="stat-received" class="stat-value">0</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Sightings Sent</span>
+                        <span id="stat-sent" class="stat-value">0</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Syncs Completed</span>
+                        <span id="stat-syncs" class="stat-value">0</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Dedup Cache</span>
+                        <span id="stat-seen" class="stat-value">0</span>
+                    </div>
+                    <div class="stat-divider"></div>
+                    <div class="stat-row">
+                        <span class="stat-label">Blocked Connections</span>
+                        <span id="stat-blocked" class="stat-value">0</span>
+                    </div>
+                </div>
+                <button id="btn-console-mode" class="btn-secondary btn-console">Enable Console Mode</button>
+                <p class="network-note">All connections are direct peer-to-peer via WebRTC. No data passes through a central server.</p>
+            </div>
+        </div>
 
         <!-- Report Modal -->
         <div id="report-modal" class="modal-overlay" hidden>
@@ -182,6 +234,15 @@
                 </form>
             </div>
         </div>
+    </div>
+
+    <!-- Console Overlay -->
+    <div id="console-overlay" class="console-overlay" hidden>
+        <div class="console-header">
+            <span>Network Console</span>
+            <button id="console-close" class="modal-close">&times;</button>
+        </div>
+        <div id="console-output" class="console-output"></div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
