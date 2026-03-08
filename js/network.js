@@ -118,6 +118,48 @@ export function initNetwork({ onSighting, onPeerCount }) {
 
     netLog('info', `Our peer ID: ${selfId}`);
 
+    // WebRTC health check — does ICE candidate gathering work at all?
+    try {
+        const testPc = new RTCPeerConnection({
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
+        const dc = testPc.createDataChannel('test');
+        let candidateCount = 0;
+        testPc.onicecandidate = (e) => {
+            if (e.candidate) {
+                candidateCount++;
+            } else {
+                netLog('ice', `Health check OK: ${candidateCount} ICE candidates gathered`);
+                testPc.close();
+            }
+        };
+        testPc.onicegatheringstatechange = () => {
+            netLog('ice', `Gathering state: ${testPc.iceGatheringState}`);
+        };
+        testPc.createOffer().then(offer => {
+            testPc.setLocalDescription(offer);
+            netLog('ice', 'Offer created, gathering candidates...');
+        }).catch(e => netLog('ice', `Offer creation FAILED: ${e.message}`));
+        // Timeout fallback
+        setTimeout(() => {
+            if (testPc.iceGatheringState !== 'complete') {
+                netLog('ice', `TIMEOUT: gathering stuck at "${testPc.iceGatheringState}" after 10s (${candidateCount} candidates so far)`);
+                testPc.close();
+            }
+        }, 10000);
+    } catch (e) {
+        netLog('ice', `WebRTC not available: ${e.message}`);
+    }
+
+    // Check Trystero offer pool health via room.getPeers
+    setTimeout(() => {
+        try {
+            const peers = room.getPeers();
+            const peerIds = Object.keys(peers);
+            netLog('pool', `Active WebRTC peers: ${peerIds.length}${peerIds.length > 0 ? ' (' + peerIds.map(id => id.slice(0,8)).join(', ') + ')' : ''}`);
+        } catch {}
+    }, 15000);
+
     // Monitor relay WebSocket traffic
     setTimeout(() => {
         try {
