@@ -2,9 +2,9 @@
 // All messages are anonymous — no peer IDs, no identity, just sighting data
 
 import { joinRoom, getRelaySockets } from 'https://esm.run/trystero/torrent';
-import { saveSighting, sightingExists, saveConfirmation, getAllSightingIds, getSightingsById, estimatePhotoStorage, evictOldestPhotos, getAllConfirmationIds, getConfirmationsById } from './db.js';
-import { checkFederalIP, extractIPsFromCandidate } from './cidr.js';
-import { reencodePhoto } from './media.js';
+import { saveSighting, sightingExists, saveConfirmation, getAllSightingIds, getSightingsById, estimatePhotoStorage, evictOldestPhotos, getAllConfirmationIds, getConfirmationsById } from './db.js?v=2';
+import { checkFederalIP, extractIPsFromCandidate } from './cidr.js?v=2';
+import { reencodePhoto } from './media.js?v=2';
 
 const APP_ID = 'icebergmap-anonymous-sightings-v1';
 const ROOM_NAME = 'sightings';
@@ -21,22 +21,19 @@ const RTC_CONFIG = {
         // STUN by IP to bypass DNS blocking
         { urls: 'stun:74.125.250.129:19302' },   // stun.l.google.com
         { urls: 'stun:74.125.250.130:19302' },   // stun1.l.google.com
-        // STUN by hostname as fallback
+        // STUN by hostname — multiple providers for redundancy
         { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun.cloudflare.com:3478' },
-        // Free TURN relay for restrictive networks
+        { urls: 'stun:stun.services.mozilla.com:3478' },
+        { urls: 'stun:stun.nextcloud.com:3478' },
+        // Free TURN relays for restrictive networks
         {
-            urls: 'turn:relay1.expressturn.com:443',
-            username: 'ef4OYRHBQ8TQMHIAOO',
-            credential: 'zYLhlR5EaEcnHSgR',
-        },
-        {
-            urls: 'turn:openrelay.metered.ca:443',
-            username: 'openrelayproject',
-            credential: 'openrelayproject',
-        },
-        {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            urls: [
+                'turn:openrelay.metered.ca:80',
+                'turn:openrelay.metered.ca:443',
+                'turn:openrelay.metered.ca:443?transport=tcp',
+            ],
             username: 'openrelayproject',
             credential: 'openrelayproject',
         },
