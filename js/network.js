@@ -18,11 +18,28 @@ const TRACKER_URLS = [
 
 const RTC_CONFIG = {
     iceServers: [
+        // STUN by IP to bypass DNS blocking
+        { urls: 'stun:74.125.250.129:19302' },   // stun.l.google.com
+        { urls: 'stun:74.125.250.130:19302' },   // stun1.l.google.com
+        // STUN by hostname as fallback
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
         { urls: 'stun:stun.cloudflare.com:3478' },
-        { urls: 'stun:stun.services.mozilla.com:3478' },
+        // Free TURN relay for restrictive networks
+        {
+            urls: 'turn:relay1.expressturn.com:443',
+            username: 'ef4OYRHBQ8TQMHIAOO',
+            credential: 'zYLhlR5EaEcnHSgR',
+        },
+        {
+            urls: 'turn:openrelay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayproject',
+        },
+        {
+            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject',
+        },
     ]
 };
 
