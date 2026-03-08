@@ -17,47 +17,76 @@ const TRACKER_URLS = [
     'wss://tracker.files.fm:7073/announce',
 ];
 
-// TODO: replace with privacy-respecting servers once connectivity is proven
-const RTC_CONFIG = {
-    iceServers: [
-        // Google STUN — by IP to bypass DNS issues
-        { urls: 'stun:74.125.250.129:19302' },
-        { urls: 'stun:74.125.250.130:19302' },
-        // Google STUN — by hostname
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
-        // Cloudflare STUN
-        { urls: 'stun:stun.cloudflare.com:3478' },
-        // Nextcloud STUN
-        { urls: 'stun:stun.nextcloud.com:443' },
-        { urls: 'stun:stun.nextcloud.com:3478' },
-        // Sipgate STUN
-        { urls: 'stun:stun.sipgate.net:3478' },
-        { urls: 'stun:stun.sipgate.net:10000' },
-        // TURN relays
-        {
-            urls: [
-                'turn:openrelay.metered.ca:80',
-                'turn:openrelay.metered.ca:443',
-                'turn:openrelay.metered.ca:443?transport=tcp',
-            ],
-            username: 'openrelayproject',
-            credential: 'openrelayproject',
-        },
-        {
-            urls: [
-                'turn:standard.relay.metered.ca:80',
-                'turn:standard.relay.metered.ca:443',
-                'turn:standard.relay.metered.ca:443?transport=tcp',
-            ],
-            username: 'openrelayproject',
-            credential: 'openrelayproject',
-        },
-    ]
-};
+// Generate ephemeral TURN credentials using TURN REST API (RFC 7635)
+// Uses metered.ca's static auth shared secret
+async function generateTurnCredentials() {
+    const secret = 'openrelayprojectsecret';
+    const ttl = 86400; // 24 hours
+    const timestamp = Math.floor(Date.now() / 1000) + ttl;
+    const username = timestamp.toString();
+
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+        'raw', encoder.encode(secret),
+        { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']
+    );
+    const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(username));
+    const credential = btoa(String.fromCharCode(...new Uint8Array(signature)));
+
+    return { username, credential };
+}
+
+// Build ICE server config with fresh TURN credentials
+async function buildRtcConfig() {
+    let turnCreds;
+    try {
+        turnCreds = await generateTurnCredentials();
+        netLog('info', `Generated ephemeral TURN credentials (user: ${turnCreds.username})`);
+    } catch (e) {
+        netLog('block', `Failed to generate TURN credentials: ${e.message}`);
+        turnCreds = { username: 'openrelayproject', credential: 'openrelayproject' };
+    }
+
+    return {
+        iceServers: [
+            // STUN — multiple providers for redundancy
+            { urls: 'stun:74.125.250.129:19302' },   // Google by IP
+            { urls: 'stun:74.125.250.130:19302' },
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' },
+            { urls: 'stun:stun.cloudflare.com:3478' },
+            { urls: 'stun:stun.nextcloud.com:3478' },
+            { urls: 'stun:stun.sipgate.net:3478' },
+            // TURN with ephemeral credentials — TCP critical for networks blocking UDP
+            {
+                urls: [
+                    'turn:staticauth.openrelay.metered.ca:80',
+                    'turn:staticauth.openrelay.metered.ca:443',
+                    'turn:staticauth.openrelay.metered.ca:80?transport=tcp',
+                    'turn:staticauth.openrelay.metered.ca:443?transport=tcp',
+                    'turns:staticauth.openrelay.metered.ca:443?transport=tcp',
+                ],
+                username: turnCreds.username,
+                credential: turnCreds.credential,
+            },
+            // Fallback TURN with same credentials
+            {
+                urls: [
+                    'turn:openrelay.metered.ca:80',
+                    'turn:openrelay.metered.ca:443',
+                    'turn:openrelay.metered.ca:80?transport=tcp',
+                    'turn:openrelay.metered.ca:443?transport=tcp',
+                    'turns:openrelay.metered.ca:443?transport=tcp',
+                ],
+                username: turnCreds.username,
+                credential: turnCreds.credential,
+            },
+        ]
+    };
+}
 
 // Monkey-patch RTCPeerConnection to log ICE candidates and connection state
 const OriginalRTCPeerConnection = window.RTCPeerConnection;
@@ -182,7 +211,7 @@ async function cleanPhotos(photos) {
  * Initialize P2P network.
  * @param {{ onSighting: Function, onPeerCount: Function }} callbacks
  */
-export function initNetwork({ onSighting, onPeerCount }) {
+export async function initNetwork({ onSighting, onPeerCount }) {
     onSightingReceived = onSighting;
     onPeerCountChange = onPeerCount;
 
@@ -191,9 +220,13 @@ export function initNetwork({ onSighting, onPeerCount }) {
         netLog('info', `  Tracker: ${url}`);
     }
 
+    // Generate fresh TURN credentials before joining
+    const rtcConfig = await buildRtcConfig();
+    netLog('info', `ICE config: ${rtcConfig.iceServers.length} server entries`);
+
     try {
         room = joinRoom(
-            { appId: APP_ID, relayUrls: TRACKER_URLS, rtcConfig: RTC_CONFIG },
+            { appId: APP_ID, relayUrls: TRACKER_URLS, rtcConfig },
             ROOM_NAME,
             (err) => netLog('block', `Join error: ${err}`)
         );
