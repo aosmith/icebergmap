@@ -444,6 +444,8 @@ function refreshNetworkStats() {
     document.getElementById('stat-peers').textContent = stats.peers;
     document.getElementById('stat-uptime').textContent = stats.uptime;
     document.getElementById('stat-protocol').textContent = stats.protocol;
+    document.getElementById('stat-selfid').textContent = stats.selfId || '-';
+    document.getElementById('stat-trackers').textContent = stats.trackers || '-';
     document.getElementById('stat-received').textContent = stats.sightingsReceived;
     document.getElementById('stat-sent').textContent = stats.sightingsSent;
     document.getElementById('stat-syncs').textContent = stats.syncsCompleted;

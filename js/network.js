@@ -1,7 +1,7 @@
 // P2P networking via Trystero (BitTorrent DHT matchmaking + WebRTC)
 // All messages are anonymous — no peer IDs, no identity, just sighting data
 
-import { joinRoom } from 'https://esm.run/trystero@0.20.1/torrent';
+import { joinRoom, getRelaySockets, selfId } from 'https://esm.run/trystero@0.20.1/torrent';
 const _h = window.__cb || Date.now().toString(36);
 const { saveSighting, sightingExists, saveConfirmation, getAllSightingIds, getSightingsById, estimatePhotoStorage, evictOldestPhotos, getAllConfirmationIds, getConfirmationsById } = await import(`./db.js?h=${_h}`);
 const { checkFederalIP, extractIPsFromCandidate } = await import(`./cidr.js?h=${_h}`);
@@ -109,12 +109,63 @@ export function initNetwork({ onSighting, onPeerCount }) {
         room = joinRoom(
             { appId: APP_ID },
             ROOM_NAME,
-            (err) => netLog('block', `Join error: ${err}`)
+            (err) => netLog('block', `Join error: ${typeof err === 'object' ? JSON.stringify(err) : err}`)
         );
     } catch (err) {
         netLog('block', `Failed to join room: ${err.message}`);
         return;
     }
+
+    netLog('info', `Our peer ID: ${selfId}`);
+
+    // Monitor tracker WebSocket traffic
+    setTimeout(() => {
+        try {
+            const sockets = getRelaySockets();
+            const urls = Object.keys(sockets);
+            netLog('ws', `Tracker sockets: ${urls.length} (${urls.map(u => new URL(u).hostname).join(', ')})`);
+            for (const [url, socket] of Object.entries(sockets)) {
+                const host = new URL(url).hostname;
+                netLog('ws', `${host}: readyState=${socket.readyState} (${['CONNECTING','OPEN','CLOSING','CLOSED'][socket.readyState]})`);
+
+                // Intercept outgoing sends
+                const origSend = socket.send.bind(socket);
+                socket.send = (data) => {
+                    try {
+                        const msg = JSON.parse(data);
+                        if (msg.offers) {
+                            netLog('ws', `→ ${host}: ANNOUNCE info_hash=${msg.info_hash} peer_id=${msg.peer_id?.slice(0,8)}.. offers=${msg.offers.length}`);
+                        } else if (msg.answer) {
+                            netLog('ws', `→ ${host}: ANSWER to=${msg.to_peer_id?.slice(0,8)}.. offer_id=${msg.offer_id?.slice(0,8)}..`);
+                        } else {
+                            netLog('ws', `→ ${host}: ${JSON.stringify(msg).slice(0, 120)}`);
+                        }
+                    } catch {}
+                    origSend(data);
+                };
+
+                // Intercept incoming messages
+                socket.addEventListener('message', (event) => {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        if (msg['failure reason']) {
+                            netLog('ws', `← ${host}: FAILURE: ${msg['failure reason']}`);
+                        } else if (msg.offer) {
+                            netLog('ws', `← ${host}: GOT OFFER from=${msg.peer_id?.slice(0,8)}.. offer_id=${msg.offer_id?.slice(0,8)}..`);
+                        } else if (msg.answer) {
+                            netLog('ws', `← ${host}: GOT ANSWER from=${msg.peer_id?.slice(0,8)}.. offer_id=${msg.offer_id?.slice(0,8)}..`);
+                        } else if (msg.info_hash) {
+                            netLog('ws', `← ${host}: RESPONSE info_hash=${msg.info_hash} interval=${msg.interval || '-'}`);
+                        } else {
+                            netLog('ws', `← ${host}: ${JSON.stringify(msg).slice(0, 120)}`);
+                        }
+                    } catch {}
+                });
+            }
+        } catch (e) {
+            netLog('ws', `Failed to attach socket monitors: ${e.message}`);
+        }
+    }, 2000);
 
     // Warn if no peers found after 15 seconds
     setTimeout(() => {
@@ -401,6 +452,15 @@ export function getNetworkStats() {
     else if (uptimeMins > 0) uptime = `${uptimeMins}m`;
     else uptime = `${Math.floor(uptimeMs / 1000)}s`;
 
+    let trackerInfo = '';
+    try {
+        const sockets = getRelaySockets();
+        const states = Object.entries(sockets).map(([url, s]) =>
+            `${new URL(url).hostname}:${['CONN','OPEN','CLOS','DEAD'][s.readyState]}`
+        );
+        trackerInfo = states.join(', ');
+    } catch {}
+
     return {
         peers: peerCount,
         blocked: blockedCount,
@@ -411,6 +471,8 @@ export function getNetworkStats() {
         uptime,
         protocol: 'BitTorrent DHT + WebRTC',
         room: ROOM_NAME,
+        selfId: selfId?.slice(0, 8) + '...',
+        trackers: trackerInfo,
     };
 }
 
