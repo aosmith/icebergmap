@@ -2,9 +2,10 @@
 // All messages are anonymous — no peer IDs, no identity, just sighting data
 
 import { joinRoom, getRelaySockets } from 'https://esm.run/trystero/torrent';
-import { saveSighting, sightingExists, saveConfirmation, getAllSightingIds, getSightingsById, estimatePhotoStorage, evictOldestPhotos, getAllConfirmationIds, getConfirmationsById } from './db.js?v=3';
-import { checkFederalIP, extractIPsFromCandidate } from './cidr.js?v=3';
-import { reencodePhoto } from './media.js?v=3';
+const _h = window.__cb || Date.now().toString(36);
+const { saveSighting, sightingExists, saveConfirmation, getAllSightingIds, getSightingsById, estimatePhotoStorage, evictOldestPhotos, getAllConfirmationIds, getConfirmationsById } = await import(`./db.js?h=${_h}`);
+const { checkFederalIP, extractIPsFromCandidate } = await import(`./cidr.js?h=${_h}`);
+const { reencodePhoto } = await import(`./media.js?h=${_h}`);
 
 const APP_ID = 'icebergmap-anonymous-sightings-v1';
 const ROOM_NAME = 'sightings';
@@ -16,34 +17,25 @@ const TRACKER_URLS = [
     'wss://tracker.files.fm:7073/announce',
 ];
 
+// Privacy-first: no Google, no Cloudflare, no US tech company STUN/TURN.
+// These people are in danger. Every server that sees their IP is a risk.
+// Self-hosted Coturn is the long-term solution.
 const RTC_CONFIG = {
     iceServers: [
-        // STUN by IP to bypass DNS blocking
-        { urls: 'stun:74.125.250.129:19302' },   // stun.l.google.com
-        { urls: 'stun:74.125.250.130:19302' },   // stun1.l.google.com
-        // STUN by hostname — multiple providers for redundancy
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
-        { urls: 'stun:stun.cloudflare.com:3478' },
+        // Nextcloud — open source, German company, privacy-focused
+        { urls: 'stun:stun.nextcloud.com:443' },
         { urls: 'stun:stun.nextcloud.com:3478' },
-        // TURN relays — critical when STUN fails or NAT is symmetric
+        // Sipgate — German telecom, no US jurisdiction
+        { urls: 'stun:stun.sipgate.net:3478' },
+        { urls: 'stun:stun.sipgate.net:10000' },
+        // TURN relays — needed when STUN fails or NAT is symmetric
+        // metered.ca is the only free public TURN available
+        // TODO: self-host Coturn on privacy-respecting infrastructure
         {
             urls: [
                 'turn:openrelay.metered.ca:80',
                 'turn:openrelay.metered.ca:443',
                 'turn:openrelay.metered.ca:443?transport=tcp',
-            ],
-            username: 'openrelayproject',
-            credential: 'openrelayproject',
-        },
-        {
-            urls: [
-                'turn:standard.relay.metered.ca:80',
-                'turn:standard.relay.metered.ca:443',
-                'turn:standard.relay.metered.ca:443?transport=tcp',
             ],
             username: 'openrelayproject',
             credential: 'openrelayproject',

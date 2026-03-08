@@ -1,10 +1,11 @@
 // Iceberg Map — Anonymous P2P ICE Sighting Reports
 // No accounts. No servers. No tracking.
 
-import { openDB, saveSighting, getSightings, getSightingCount, getConfirmationCounts, saveConfirmation, purgeOldSightings, clearAllData, getLocalVote } from './db.js?v=3';
-import { initNetwork, publishSighting, publishConfirmation, getPeerCount, getBlockedCount, getNetworkStats, onConsoleLog } from './network.js?v=3';
-import { initMap, updateMapSightings, invalidateMap } from './map.js?v=3';
-import { stripMetadata } from './media.js?v=3';
+const _h = window.__cb || Date.now().toString(36);
+const { openDB, saveSighting, getSightings, getSightingCount, getConfirmationCounts, saveConfirmation, purgeOldSightings, clearAllData, getLocalVote } = await import(`./db.js?h=${_h}`);
+const { initNetwork, publishSighting, publishConfirmation, getPeerCount, getBlockedCount, getNetworkStats, onConsoleLog } = await import(`./network.js?h=${_h}`);
+const { initMap, updateMapSightings, invalidateMap } = await import(`./map.js?h=${_h}`);
+const { stripMetadata } = await import(`./media.js?h=${_h}`);
 
 const US_STATES = [
     'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA',

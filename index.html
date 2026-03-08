@@ -247,6 +247,7 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-    <script type="module" src="js/app.js?v=3"></script>
+    <script>window.__cb = Date.now().toString(36);</script>
+    <script type="module">import('./js/app.js?h=' + window.__cb);</script>
 </body>
 </html>
