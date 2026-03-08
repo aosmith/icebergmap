@@ -1,7 +1,7 @@
 // P2P networking via Trystero (BitTorrent DHT matchmaking + WebRTC)
 // All messages are anonymous — no peer IDs, no identity, just sighting data
 
-import { joinRoom, getRelaySockets } from 'https://esm.run/trystero/torrent';
+import { joinRoom } from 'https://esm.run/trystero/mqtt';
 const _h = window.__cb || Date.now().toString(36);
 const { saveSighting, sightingExists, saveConfirmation, getAllSightingIds, getSightingsById, estimatePhotoStorage, evictOldestPhotos, getAllConfirmationIds, getConfirmationsById } = await import(`./db.js?h=${_h}`);
 const { checkFederalIP, extractIPsFromCandidate } = await import(`./cidr.js?h=${_h}`);
@@ -115,19 +115,6 @@ export function initNetwork({ onSighting, onPeerCount }) {
         netLog('block', `Failed to join room: ${err.message}`);
         return;
     }
-
-    // Check relay/tracker connection status after a few seconds
-    setTimeout(() => {
-        try {
-            const sockets = getRelaySockets();
-            for (const [url, ws] of Object.entries(sockets)) {
-                const state = ws.readyState === 1 ? 'connected' : ws.readyState === 0 ? 'connecting' : 'failed';
-                netLog(state === 'connected' ? 'info' : 'block', `Tracker ${url}: ${state}`);
-            }
-        } catch (e) {
-            netLog('block', `Could not read relay sockets: ${e.message}`);
-        }
-    }, 5000);
 
     // Warn if no peers found after 15 seconds
     setTimeout(() => {
@@ -422,7 +409,7 @@ export function getNetworkStats() {
         syncsCompleted: syncCompletedCount,
         seenMessages: seenMessages.size,
         uptime,
-        protocol: 'BitTorrent DHT + WebRTC',
+        protocol: 'MQTT + WebRTC',
         room: ROOM_NAME,
     };
 }
