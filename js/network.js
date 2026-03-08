@@ -9,6 +9,13 @@ import { reencodePhoto } from './media.js';
 const APP_ID = 'icebergmap-anonymous-sightings-v1';
 const ROOM_NAME = 'sightings';
 
+const TRACKER_URLS = [
+    'wss://tracker.openwebtorrent.com',
+    'wss://tracker.webtorrent.dev',
+    'wss://tracker.btorrent.xyz',
+    'wss://tracker.files.fm:7073/announce',
+];
+
 // Sync limits
 const MAX_SYNC_SIGHTINGS = 200;
 const MAX_SYNC_IDS = 2000;
@@ -38,6 +45,7 @@ let sightingsReceived = 0;
 let sightingsSent = 0;
 let syncCompletedCount = 0;
 let consoleCallback = null;
+const earlyLogs = [];
 
 // Track seen message IDs to prevent infinite re-broadcast
 const seenMessages = new Set();
@@ -48,7 +56,12 @@ const peerSyncState = new Map();
 
 function netLog(tag, msg) {
     console.log(`[P2P] [${tag}] ${msg}`);
-    if (consoleCallback) consoleCallback(tag, msg);
+    if (consoleCallback) {
+        consoleCallback(tag, msg);
+    } else {
+        earlyLogs.push({ tag, msg, time: Date.now() });
+        if (earlyLogs.length > 50) earlyLogs.shift();
+    }
 }
 
 function addSeen(id) {
@@ -96,7 +109,24 @@ export function initNetwork({ onSighting, onPeerCount }) {
     onSightingReceived = onSighting;
     onPeerCountChange = onPeerCount;
 
-    room = joinRoom({ appId: APP_ID }, ROOM_NAME);
+    netLog('info', `Connecting to ${TRACKER_URLS.length} trackers...`);
+    for (const url of TRACKER_URLS) {
+        netLog('info', `  Tracker: ${url}`);
+    }
+
+    try {
+        room = joinRoom({ appId: APP_ID, trackerUrls: TRACKER_URLS }, ROOM_NAME);
+    } catch (err) {
+        netLog('block', `Failed to join room: ${err.message}`);
+        return;
+    }
+
+    // Warn if no peers found after 15 seconds
+    setTimeout(() => {
+        if (peerCount === 0) {
+            netLog('info', 'No peers found yet — trackers may be unreachable or no other users are online');
+        }
+    }, 15000);
 
     // Live broadcast actions
     const [_sendSighting, getSighting] = room.makeAction('sighting');
@@ -391,6 +421,13 @@ export function getNetworkStats() {
 
 export function onConsoleLog(callback) {
     consoleCallback = callback;
+    // Flush buffered early logs
+    if (callback && earlyLogs.length > 0) {
+        for (const entry of earlyLogs) {
+            callback(entry.tag, entry.msg);
+        }
+        earlyLogs.length = 0;
+    }
 }
 
 export function shutdown() {
