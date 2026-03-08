@@ -105,15 +105,12 @@ export function initNetwork({ onSighting, onPeerCount }) {
 
     netLog('info', `Joining room: ${APP_ID} / ${ROOM_NAME}`);
 
-    // Free, open nostr relays (no auth, no payment required)
+    // Free, open nostr relays — verified online via nostr.watch API
     const relayUrls = [
-        'wss://relay.damus.io',
         'wss://nos.lol',
-        'wss://relay.primal.net',
         'wss://offchain.pub',
-        'wss://nostr.fmt.wiz.biz',
-        'wss://relay.nostr.bg',
-        'wss://relay.current.fyi',
+        'wss://nostr.mom',
+        'wss://relay.damus.io',
         'wss://nostr-pub.wellorder.net',
     ];
 
@@ -172,46 +169,54 @@ export function initNetwork({ onSighting, onPeerCount }) {
         } catch {}
     }, 15000);
 
-    // Monitor relay WebSocket traffic
+    // Round-robin announce throttling
+    // Trystero announces on ALL relays every 5.3s. We intercept sends to:
+    //   - Always allow offers/answers through (time-sensitive signaling)
+    //   - Only allow periodic announces on ONE relay at a time, rotating
+    // This drops per-relay announce rate from every 5.3s to every ~26s (5 relays)
+    let announceRelayIndex = 0;
     setTimeout(() => {
         try {
             const sockets = getRelaySockets();
-            const urls = Object.keys(sockets);
-            netLog('ws', `Relay sockets: ${urls.length}`);
+            const relayEntries = Object.entries(sockets);
+            const relayCount = relayEntries.length;
             let openCount = 0;
-            for (const [url, socket] of Object.entries(sockets)) {
+
+            netLog('ws', `Relays: ${relayCount}, round-robin announces`);
+
+            relayEntries.forEach(([url, socket], index) => {
                 const host = new URL(url).hostname;
                 if (socket.readyState === 1) openCount++;
 
-                // Intercept outgoing sends
                 const origSend = socket.send.bind(socket);
                 socket.send = (data) => {
                     try {
                         const msg = JSON.parse(data);
-                        if (Array.isArray(msg)) {
-                            // Nostr format: ["EVENT", {...}] or ["REQ", subId, filter]
-                            if (msg[0] === 'EVENT') {
-                                const content = msg[1]?.content;
-                                const parsed = content ? JSON.parse(content) : {};
-                                if (parsed.offer) {
-                                    netLog('ws', `→ ${host}: OFFER to peer`);
-                                } else if (parsed.answer) {
-                                    netLog('ws', `→ ${host}: ANSWER to peer`);
-                                } else if (parsed.peerId) {
-                                    netLog('ws', `→ ${host}: ANNOUNCE peerId=${parsed.peerId?.slice(0,8)}..`);
-                                }
-                            } else if (msg[0] === 'REQ') {
-                                netLog('ws', `→ ${host}: SUBSCRIBE kind=${msg[2]?.kinds?.[0] || '?'}`);
+                        if (Array.isArray(msg) && msg[0] === 'EVENT') {
+                            const content = msg[1]?.content;
+                            const parsed = content ? JSON.parse(content) : {};
+
+                            if (parsed.offer || parsed.answer) {
+                                // Offers and answers always go through immediately
+                                netLog('ws', `→ ${host}: ${parsed.offer ? 'OFFER' : 'ANSWER'}`);
+                                origSend(data);
+                                return;
                             }
-                        } else if (msg.offers) {
-                            // Torrent format (fallback)
-                            netLog('ws', `→ ${host}: ANNOUNCE offers=${msg.offers.length}`);
+
+                            if (parsed.peerId) {
+                                // Periodic announce — only allow on current round-robin relay
+                                if (index !== announceRelayIndex % relayCount) {
+                                    return; // Silently drop — not this relay's turn
+                                }
+                                announceRelayIndex++;
+                                netLog('ws', `→ ${host}: ANNOUNCE [${index + 1}/${relayCount}]`);
+                            }
                         }
                     } catch {}
                     origSend(data);
                 };
 
-                // Intercept incoming messages
+                // Log incoming messages
                 socket.addEventListener('message', (event) => {
                     try {
                         const msg = JSON.parse(event.data);
@@ -219,27 +224,23 @@ export function initNetwork({ onSighting, onPeerCount }) {
                             if (msg[0] === 'EVENT' && msg[2]?.content) {
                                 const content = JSON.parse(msg[2].content);
                                 if (content.offer) {
-                                    netLog('ws', `← ${host}: GOT OFFER from peer`);
+                                    netLog('ws', `← ${host}: GOT OFFER`);
                                 } else if (content.answer) {
-                                    netLog('ws', `← ${host}: GOT ANSWER from peer`);
+                                    netLog('ws', `← ${host}: GOT ANSWER`);
                                 } else if (content.peerId) {
-                                    netLog('ws', `← ${host}: PEER ANNOUNCE peerId=${content.peerId?.slice(0,8)}..`);
+                                    netLog('ws', `← ${host}: PEER SEEN peerId=${content.peerId?.slice(0,8)}..`);
                                 }
-                            } else if (msg[0] === 'NOTICE') {
-                                netLog('ws', `← ${host}: NOTICE: ${msg[1]}`);
                             } else if (msg[0] === 'OK' && !msg[2]) {
                                 netLog('ws', `← ${host}: REJECTED: ${msg[3] || 'unknown'}`);
                             }
-                        } else if (msg.offer || msg.answer) {
-                            // Torrent format (fallback)
-                            netLog('ws', `← ${host}: GOT ${msg.offer ? 'OFFER' : 'ANSWER'}`);
                         }
                     } catch {}
                 });
-            }
-            netLog('ws', `${openCount}/${urls.length} relays OPEN`);
+            });
+
+            netLog('ws', `${openCount}/${relayCount} relays OPEN`);
         } catch (e) {
-            netLog('ws', `Failed to attach relay monitors: ${e.message}`);
+            netLog('ws', `Failed to setup round-robin: ${e.message}`);
         }
     }, 3000);
 
