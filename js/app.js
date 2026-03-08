@@ -40,7 +40,7 @@ async function init() {
     setupNetworkModal();
 
     // Initialize P2P network
-    await initNetwork({
+    initNetwork({
         onSighting: () => refreshCurrentView(),
         onPeerCount: (count) => updatePeerCount(count)
     });

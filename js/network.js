@@ -10,118 +10,6 @@ const { reencodePhoto } = await import(`./media.js?h=${_h}`);
 const APP_ID = 'icebergmap-anonymous-sightings-v1';
 const ROOM_NAME = 'sightings';
 
-const TRACKER_URLS = [
-    'wss://tracker.openwebtorrent.com',
-    'wss://tracker.webtorrent.dev',
-    'wss://tracker.btorrent.xyz',
-    'wss://tracker.files.fm:7073/announce',
-];
-
-// Generate ephemeral TURN credentials using TURN REST API (RFC 7635)
-// Uses metered.ca's static auth shared secret
-async function generateTurnCredentials() {
-    const secret = 'openrelayprojectsecret';
-    const ttl = 86400; // 24 hours
-    const timestamp = Math.floor(Date.now() / 1000) + ttl;
-    const username = timestamp.toString();
-
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey(
-        'raw', encoder.encode(secret),
-        { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']
-    );
-    const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(username));
-    const credential = btoa(String.fromCharCode(...new Uint8Array(signature)));
-
-    return { username, credential };
-}
-
-// Build ICE server config with fresh TURN credentials
-async function buildRtcConfig() {
-    let turnCreds;
-    try {
-        turnCreds = await generateTurnCredentials();
-        netLog('info', `Generated ephemeral TURN credentials (user: ${turnCreds.username})`);
-    } catch (e) {
-        netLog('block', `Failed to generate TURN credentials: ${e.message}`);
-        turnCreds = { username: 'openrelayproject', credential: 'openrelayproject' };
-    }
-
-    return {
-        iceServers: [
-            // STUN — multiple providers for redundancy
-            { urls: 'stun:74.125.250.129:19302' },   // Google by IP
-            { urls: 'stun:74.125.250.130:19302' },
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            { urls: 'stun:stun3.l.google.com:19302' },
-            { urls: 'stun:stun4.l.google.com:19302' },
-            { urls: 'stun:stun.cloudflare.com:3478' },
-            { urls: 'stun:stun.nextcloud.com:3478' },
-            { urls: 'stun:stun.sipgate.net:3478' },
-            // TURN with ephemeral credentials — TCP critical for networks blocking UDP
-            {
-                urls: [
-                    'turn:staticauth.openrelay.metered.ca:80',
-                    'turn:staticauth.openrelay.metered.ca:443',
-                    'turn:staticauth.openrelay.metered.ca:80?transport=tcp',
-                    'turn:staticauth.openrelay.metered.ca:443?transport=tcp',
-                    'turns:staticauth.openrelay.metered.ca:443?transport=tcp',
-                ],
-                username: turnCreds.username,
-                credential: turnCreds.credential,
-            },
-            // Fallback TURN with same credentials
-            {
-                urls: [
-                    'turn:openrelay.metered.ca:80',
-                    'turn:openrelay.metered.ca:443',
-                    'turn:openrelay.metered.ca:80?transport=tcp',
-                    'turn:openrelay.metered.ca:443?transport=tcp',
-                    'turns:openrelay.metered.ca:443?transport=tcp',
-                ],
-                username: turnCreds.username,
-                credential: turnCreds.credential,
-            },
-        ]
-    };
-}
-
-// Monkey-patch RTCPeerConnection to log ICE candidates and connection state
-const OriginalRTCPeerConnection = window.RTCPeerConnection;
-window.RTCPeerConnection = function(...args) {
-    const pc = new OriginalRTCPeerConnection(...args);
-    const config = args[0];
-
-    netLog('ice', `New RTCPeerConnection created with ${config?.iceServers?.length || 0} ICE servers`);
-
-    pc.addEventListener('icecandidate', (event) => {
-        if (event.candidate) {
-            const c = event.candidate;
-            netLog('ice', `Candidate: ${c.type || '?'} ${c.protocol || '?'} ${c.address || '?'}:${c.port || '?'} (${c.candidateType || c.type || '?'})`);
-        } else {
-            netLog('ice', 'ICE gathering complete');
-        }
-    });
-
-    pc.addEventListener('icegatheringstatechange', () => {
-        netLog('ice', `Gathering state: ${pc.iceGatheringState}`);
-    });
-
-    pc.addEventListener('iceconnectionstatechange', () => {
-        netLog('ice', `ICE connection state: ${pc.iceConnectionState}`);
-    });
-
-    pc.addEventListener('connectionstatechange', () => {
-        netLog('ice', `Connection state: ${pc.connectionState}`);
-    });
-
-    return pc;
-};
-// Preserve prototype chain for instanceof checks
-window.RTCPeerConnection.prototype = OriginalRTCPeerConnection.prototype;
-
 // Sync limits
 const MAX_SYNC_SIGHTINGS = 200;
 const MAX_SYNC_IDS = 2000;
@@ -211,22 +99,15 @@ async function cleanPhotos(photos) {
  * Initialize P2P network.
  * @param {{ onSighting: Function, onPeerCount: Function }} callbacks
  */
-export async function initNetwork({ onSighting, onPeerCount }) {
+export function initNetwork({ onSighting, onPeerCount }) {
     onSightingReceived = onSighting;
     onPeerCountChange = onPeerCount;
 
-    netLog('info', `Connecting to ${TRACKER_URLS.length} trackers...`);
-    for (const url of TRACKER_URLS) {
-        netLog('info', `  Tracker: ${url}`);
-    }
-
-    // Generate fresh TURN credentials before joining
-    const rtcConfig = await buildRtcConfig();
-    netLog('info', `ICE config: ${rtcConfig.iceServers.length} server entries`);
+    netLog('info', `Joining room: ${APP_ID} / ${ROOM_NAME}`);
 
     try {
         room = joinRoom(
-            { appId: APP_ID, relayUrls: TRACKER_URLS, rtcConfig },
+            { appId: APP_ID },
             ROOM_NAME,
             (err) => netLog('block', `Join error: ${err}`)
         );
