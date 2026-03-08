@@ -105,9 +105,21 @@ export function initNetwork({ onSighting, onPeerCount }) {
 
     netLog('info', `Joining room: ${APP_ID} / ${ROOM_NAME}`);
 
+    // Free, open nostr relays (no auth, no payment required)
+    const relayUrls = [
+        'wss://relay.damus.io',
+        'wss://nos.lol',
+        'wss://relay.primal.net',
+        'wss://offchain.pub',
+        'wss://nostr.fmt.wiz.biz',
+        'wss://relay.nostr.bg',
+        'wss://relay.current.fyi',
+        'wss://nostr-pub.wellorder.net',
+    ];
+
     try {
         room = joinRoom(
-            { appId: APP_ID },
+            { appId: APP_ID, relayUrls },
             ROOM_NAME,
             (err) => netLog('block', `Join error: ${typeof err === 'object' ? JSON.stringify(err) : err}`)
         );
