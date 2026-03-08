@@ -17,25 +17,41 @@ const TRACKER_URLS = [
     'wss://tracker.files.fm:7073/announce',
 ];
 
-// Privacy-first: no Google, no Cloudflare, no US tech company STUN/TURN.
-// These people are in danger. Every server that sees their IP is a risk.
-// Self-hosted Coturn is the long-term solution.
+// TODO: replace with privacy-respecting servers once connectivity is proven
 const RTC_CONFIG = {
     iceServers: [
-        // Nextcloud — open source, German company, privacy-focused
+        // Google STUN — by IP to bypass DNS issues
+        { urls: 'stun:74.125.250.129:19302' },
+        { urls: 'stun:74.125.250.130:19302' },
+        // Google STUN — by hostname
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
+        // Cloudflare STUN
+        { urls: 'stun:stun.cloudflare.com:3478' },
+        // Nextcloud STUN
         { urls: 'stun:stun.nextcloud.com:443' },
         { urls: 'stun:stun.nextcloud.com:3478' },
-        // Sipgate — German telecom, no US jurisdiction
+        // Sipgate STUN
         { urls: 'stun:stun.sipgate.net:3478' },
         { urls: 'stun:stun.sipgate.net:10000' },
-        // TURN relays — needed when STUN fails or NAT is symmetric
-        // metered.ca is the only free public TURN available
-        // TODO: self-host Coturn on privacy-respecting infrastructure
+        // TURN relays
         {
             urls: [
                 'turn:openrelay.metered.ca:80',
                 'turn:openrelay.metered.ca:443',
                 'turn:openrelay.metered.ca:443?transport=tcp',
+            ],
+            username: 'openrelayproject',
+            credential: 'openrelayproject',
+        },
+        {
+            urls: [
+                'turn:standard.relay.metered.ca:80',
+                'turn:standard.relay.metered.ca:443',
+                'turn:standard.relay.metered.ca:443?transport=tcp',
             ],
             username: 'openrelayproject',
             credential: 'openrelayproject',
