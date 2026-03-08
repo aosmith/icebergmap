@@ -1,7 +1,7 @@
 // P2P networking via Trystero (BitTorrent DHT matchmaking + WebRTC)
 // All messages are anonymous — no peer IDs, no identity, just sighting data
 
-import { joinRoom } from 'https://esm.run/trystero/mqtt';
+import { joinRoom } from 'https://esm.run/trystero@0.20.1/torrent';
 const _h = window.__cb || Date.now().toString(36);
 const { saveSighting, sightingExists, saveConfirmation, getAllSightingIds, getSightingsById, estimatePhotoStorage, evictOldestPhotos, getAllConfirmationIds, getConfirmationsById } = await import(`./db.js?h=${_h}`);
 const { checkFederalIP, extractIPsFromCandidate } = await import(`./cidr.js?h=${_h}`);
@@ -409,7 +409,7 @@ export function getNetworkStats() {
         syncsCompleted: syncCompletedCount,
         seenMessages: seenMessages.size,
         uptime,
-        protocol: 'MQTT + WebRTC',
+        protocol: 'BitTorrent DHT + WebRTC',
         room: ROOM_NAME,
     };
 }
