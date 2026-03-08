@@ -1,7 +1,7 @@
-// P2P networking via Trystero (BitTorrent DHT matchmaking + WebRTC)
+// P2P networking via Trystero (Nostr relay matchmaking + WebRTC)
 // All messages are anonymous — no peer IDs, no identity, just sighting data
 
-import { joinRoom, getRelaySockets, selfId } from 'https://esm.run/trystero@0.20.1/torrent';
+import { joinRoom, getRelaySockets, selfId } from 'https://esm.run/trystero@0.20.1';
 const _h = window.__cb || Date.now().toString(36);
 const { saveSighting, sightingExists, saveConfirmation, getAllSightingIds, getSightingsById, estimatePhotoStorage, evictOldestPhotos, getAllConfirmationIds, getConfirmationsById } = await import(`./db.js?h=${_h}`);
 const { checkFederalIP, extractIPsFromCandidate } = await import(`./cidr.js?h=${_h}`);
@@ -118,27 +118,40 @@ export function initNetwork({ onSighting, onPeerCount }) {
 
     netLog('info', `Our peer ID: ${selfId}`);
 
-    // Monitor tracker WebSocket traffic
+    // Monitor relay WebSocket traffic
     setTimeout(() => {
         try {
             const sockets = getRelaySockets();
             const urls = Object.keys(sockets);
-            netLog('ws', `Tracker sockets: ${urls.length} (${urls.map(u => new URL(u).hostname).join(', ')})`);
+            netLog('ws', `Relay sockets: ${urls.length}`);
+            let openCount = 0;
             for (const [url, socket] of Object.entries(sockets)) {
                 const host = new URL(url).hostname;
-                netLog('ws', `${host}: readyState=${socket.readyState} (${['CONNECTING','OPEN','CLOSING','CLOSED'][socket.readyState]})`);
+                if (socket.readyState === 1) openCount++;
 
                 // Intercept outgoing sends
                 const origSend = socket.send.bind(socket);
                 socket.send = (data) => {
                     try {
                         const msg = JSON.parse(data);
-                        if (msg.offers) {
-                            netLog('ws', `→ ${host}: ANNOUNCE info_hash=${msg.info_hash} peer_id=${msg.peer_id?.slice(0,8)}.. offers=${msg.offers.length}`);
-                        } else if (msg.answer) {
-                            netLog('ws', `→ ${host}: ANSWER to=${msg.to_peer_id?.slice(0,8)}.. offer_id=${msg.offer_id?.slice(0,8)}..`);
-                        } else {
-                            netLog('ws', `→ ${host}: ${JSON.stringify(msg).slice(0, 120)}`);
+                        if (Array.isArray(msg)) {
+                            // Nostr format: ["EVENT", {...}] or ["REQ", subId, filter]
+                            if (msg[0] === 'EVENT') {
+                                const content = msg[1]?.content;
+                                const parsed = content ? JSON.parse(content) : {};
+                                if (parsed.offer) {
+                                    netLog('ws', `→ ${host}: OFFER to peer`);
+                                } else if (parsed.answer) {
+                                    netLog('ws', `→ ${host}: ANSWER to peer`);
+                                } else if (parsed.peerId) {
+                                    netLog('ws', `→ ${host}: ANNOUNCE peerId=${parsed.peerId?.slice(0,8)}..`);
+                                }
+                            } else if (msg[0] === 'REQ') {
+                                netLog('ws', `→ ${host}: SUBSCRIBE kind=${msg[2]?.kinds?.[0] || '?'}`);
+                            }
+                        } else if (msg.offers) {
+                            // Torrent format (fallback)
+                            netLog('ws', `→ ${host}: ANNOUNCE offers=${msg.offers.length}`);
                         }
                     } catch {}
                     origSend(data);
@@ -148,24 +161,33 @@ export function initNetwork({ onSighting, onPeerCount }) {
                 socket.addEventListener('message', (event) => {
                     try {
                         const msg = JSON.parse(event.data);
-                        if (msg['failure reason']) {
-                            netLog('ws', `← ${host}: FAILURE: ${msg['failure reason']}`);
-                        } else if (msg.offer) {
-                            netLog('ws', `← ${host}: GOT OFFER from=${msg.peer_id?.slice(0,8)}.. offer_id=${msg.offer_id?.slice(0,8)}..`);
-                        } else if (msg.answer) {
-                            netLog('ws', `← ${host}: GOT ANSWER from=${msg.peer_id?.slice(0,8)}.. offer_id=${msg.offer_id?.slice(0,8)}..`);
-                        } else if (msg.info_hash) {
-                            netLog('ws', `← ${host}: RESPONSE info_hash=${msg.info_hash} interval=${msg.interval || '-'}`);
-                        } else {
-                            netLog('ws', `← ${host}: ${JSON.stringify(msg).slice(0, 120)}`);
+                        if (Array.isArray(msg)) {
+                            if (msg[0] === 'EVENT' && msg[2]?.content) {
+                                const content = JSON.parse(msg[2].content);
+                                if (content.offer) {
+                                    netLog('ws', `← ${host}: GOT OFFER from peer`);
+                                } else if (content.answer) {
+                                    netLog('ws', `← ${host}: GOT ANSWER from peer`);
+                                } else if (content.peerId) {
+                                    netLog('ws', `← ${host}: PEER ANNOUNCE peerId=${content.peerId?.slice(0,8)}..`);
+                                }
+                            } else if (msg[0] === 'NOTICE') {
+                                netLog('ws', `← ${host}: NOTICE: ${msg[1]}`);
+                            } else if (msg[0] === 'OK' && !msg[2]) {
+                                netLog('ws', `← ${host}: REJECTED: ${msg[3] || 'unknown'}`);
+                            }
+                        } else if (msg.offer || msg.answer) {
+                            // Torrent format (fallback)
+                            netLog('ws', `← ${host}: GOT ${msg.offer ? 'OFFER' : 'ANSWER'}`);
                         }
                     } catch {}
                 });
             }
+            netLog('ws', `${openCount}/${urls.length} relays OPEN`);
         } catch (e) {
-            netLog('ws', `Failed to attach socket monitors: ${e.message}`);
+            netLog('ws', `Failed to attach relay monitors: ${e.message}`);
         }
-    }, 2000);
+    }, 3000);
 
     // Warn if no peers found after 15 seconds
     setTimeout(() => {
@@ -363,7 +385,7 @@ export function initNetwork({ onSighting, onPeerCount }) {
     });
 
     networkStartTime = Date.now();
-    netLog('info', 'Network initialized — joining BitTorrent DHT swarm');
+    netLog('info', 'Network initialized — connecting to Nostr relays');
 }
 
 /**
@@ -469,7 +491,7 @@ export function getNetworkStats() {
         syncsCompleted: syncCompletedCount,
         seenMessages: seenMessages.size,
         uptime,
-        protocol: 'BitTorrent DHT + WebRTC',
+        protocol: 'Nostr + WebRTC',
         room: ROOM_NAME,
         selfId: selfId?.slice(0, 8) + '...',
         trackers: trackerInfo,
