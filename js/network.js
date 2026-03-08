@@ -2,9 +2,9 @@
 // All messages are anonymous — no peer IDs, no identity, just sighting data
 
 import { joinRoom, getRelaySockets } from 'https://esm.run/trystero/torrent';
-import { saveSighting, sightingExists, saveConfirmation, getAllSightingIds, getSightingsById, estimatePhotoStorage, evictOldestPhotos, getAllConfirmationIds, getConfirmationsById } from './db.js?v=2';
-import { checkFederalIP, extractIPsFromCandidate } from './cidr.js?v=2';
-import { reencodePhoto } from './media.js?v=2';
+import { saveSighting, sightingExists, saveConfirmation, getAllSightingIds, getSightingsById, estimatePhotoStorage, evictOldestPhotos, getAllConfirmationIds, getConfirmationsById } from './db.js?v=3';
+import { checkFederalIP, extractIPsFromCandidate } from './cidr.js?v=3';
+import { reencodePhoto } from './media.js?v=3';
 
 const APP_ID = 'icebergmap-anonymous-sightings-v1';
 const ROOM_NAME = 'sightings';
@@ -24,10 +24,12 @@ const RTC_CONFIG = {
         // STUN by hostname — multiple providers for redundancy
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
         { urls: 'stun:stun.cloudflare.com:3478' },
-        { urls: 'stun:stun.services.mozilla.com:3478' },
         { urls: 'stun:stun.nextcloud.com:3478' },
-        // Free TURN relays for restrictive networks
+        // TURN relays — critical when STUN fails or NAT is symmetric
         {
             urls: [
                 'turn:openrelay.metered.ca:80',
@@ -37,8 +39,51 @@ const RTC_CONFIG = {
             username: 'openrelayproject',
             credential: 'openrelayproject',
         },
+        {
+            urls: [
+                'turn:standard.relay.metered.ca:80',
+                'turn:standard.relay.metered.ca:443',
+                'turn:standard.relay.metered.ca:443?transport=tcp',
+            ],
+            username: 'openrelayproject',
+            credential: 'openrelayproject',
+        },
     ]
 };
+
+// Monkey-patch RTCPeerConnection to log ICE candidates and connection state
+const OriginalRTCPeerConnection = window.RTCPeerConnection;
+window.RTCPeerConnection = function(...args) {
+    const pc = new OriginalRTCPeerConnection(...args);
+    const config = args[0];
+
+    netLog('ice', `New RTCPeerConnection created with ${config?.iceServers?.length || 0} ICE servers`);
+
+    pc.addEventListener('icecandidate', (event) => {
+        if (event.candidate) {
+            const c = event.candidate;
+            netLog('ice', `Candidate: ${c.type || '?'} ${c.protocol || '?'} ${c.address || '?'}:${c.port || '?'} (${c.candidateType || c.type || '?'})`);
+        } else {
+            netLog('ice', 'ICE gathering complete');
+        }
+    });
+
+    pc.addEventListener('icegatheringstatechange', () => {
+        netLog('ice', `Gathering state: ${pc.iceGatheringState}`);
+    });
+
+    pc.addEventListener('iceconnectionstatechange', () => {
+        netLog('ice', `ICE connection state: ${pc.iceConnectionState}`);
+    });
+
+    pc.addEventListener('connectionstatechange', () => {
+        netLog('ice', `Connection state: ${pc.connectionState}`);
+    });
+
+    return pc;
+};
+// Preserve prototype chain for instanceof checks
+window.RTCPeerConnection.prototype = OriginalRTCPeerConnection.prototype;
 
 // Sync limits
 const MAX_SYNC_SIGHTINGS = 200;
